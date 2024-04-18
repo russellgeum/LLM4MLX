@@ -6,5 +6,10 @@
 2. PyTorch를 MLX 모델로 변환하는 라이브러리 개발
 3. MLX LLM 모델을 추론 최적화하여 가속하는 방법 이해
 
+## Requirements
+```
+bash requirements.sh
+```
+
 ## 분명히 해야할 방향
 모든 걸 다할 수는 없음 무엇을 얻고자 하는지 계속 생각 필요
