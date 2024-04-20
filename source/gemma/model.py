@@ -470,7 +470,10 @@ class GemmaForCausalLM(nn.Module):
         top_p: float = 1.0,
         top_k: int = 100,
         ) -> Union[str, Sequence[str]]:
-        """Generates responses for given prompts using Gemma model."""
+        """
+        Generates responses for given prompts using Gemma model.
+        HC: Mac에서 추론할 것이므로 .to(device)는 모두 제거
+        """
         # If a single prompt is provided, treat it as a batch of 1.
         is_str_prompt = isinstance(prompts, str)
         if is_str_prompt:
@@ -483,9 +486,9 @@ class GemmaForCausalLM(nn.Module):
         max_seq_len    = max_prompt_len + output_len
         assert max_seq_len <= self.config.max_position_embeddings
 
+
         # KV 캐시 빌드
-        # num_hidden_layers 수 많큼
-        # size, dtype 크기의 torch.zeros k, v를 kv_caches에 담기
+        # num_hidden_layers 수 많큼 size, dtype 크기의 torch.zeros k, v를 kv_caches에 담기
         kv_caches = []
         for _ in range(self.config.num_hidden_layers):
             size    = (batch_size, max_seq_len, self.config.num_key_value_heads, self.config.head_dim)
@@ -494,7 +497,8 @@ class GemmaForCausalLM(nn.Module):
             v_cache = torch.zeros(size=size, dtype=dtype, device=device)
             kv_caches.append((k_cache, v_cache))
 
-        # prepare inputs
+
+        # HC: 프롬프트를 토크나이징하고, 숫자 아이디로 매핑
         token_ids_tensor      = torch.full(
             (batch_size, max_seq_len), self.tokenizer.pad_id, dtype=torch.int64)
         input_token_ids_tensor = torch.full(
@@ -502,9 +506,6 @@ class GemmaForCausalLM(nn.Module):
         for i, p in enumerate(prompt_tokens):
             token_ids_tensor[i, :len(p)] = torch.tensor(p)
             input_token_ids_tensor[i, :min_prompt_len] = torch.tensor(p[:min_prompt_len])
-        # HC: Mac에서 추론할 것이므로 .to(device)는 모두 제거
-        # print("token_ids_tensor      ", token_ids_tensor)
-        # print("input_token_ids_tensor", input_token_ids_tensor) # tensor([[   2,  651, 6996,  576, 1913,  603]])
 
         prompt_mask_tensor     = token_ids_tensor != self.tokenizer.pad_id
         input_positions_tensor = torch.arange(0, min_prompt_len, dtype=torch.int64) # tensor([0, 1, 2, 3, 4, 5])
@@ -519,11 +520,8 @@ class GemmaForCausalLM(nn.Module):
         top_ks_tensor = torch.LongTensor([top_k] * batch_size)
         output_index  = torch.tensor(min_prompt_len, dtype=torch.int64)
 
-        print("output_positions_tensor  ", output_positions_tensor)
-        print("temprature_tensor        ", temperatures_tensor)
-        print("top_ps_tensor  ", top_ps_tensor)
-        print("top_ks_tensor  ", top_ks_tensor)
-        # Prefill up to min_prompt_len tokens, then treat other prefill as
+
+        # HC: 실제 모델 포워드, Prefill up to min_prompt_len tokens, then treat other prefill as
         # decode and ignore output.
         for i in range(max_seq_len - min_prompt_len):
             next_token_ids = self(
@@ -536,7 +534,7 @@ class GemmaForCausalLM(nn.Module):
                 temperatures=temperatures_tensor, # 상수: 0.95
                 top_ps=top_ps_tensor, # tensor([1.])
                 top_ks=top_ks_tensor, # tensor([100])
-            )
+                )
 
             curr_prompt_mask = prompt_mask_tensor.index_select(1, output_index).squeeze(dim=1)
             curr_token_ids   = token_ids_tensor.index_select(1, output_index).squeeze(dim=1)
@@ -548,6 +546,7 @@ class GemmaForCausalLM(nn.Module):
             curr_mask_tensor        = mask_tensor.index_select(2, input_positions_tensor)
             output_positions_tensor = torch.tensor(0, dtype=torch.int64)
             output_index = output_index + 1
+
 
         # HC: 디토크나이징 과정, token_ids_tensor를 문장으로 치환
         token_ids = token_ids_tensor.tolist()

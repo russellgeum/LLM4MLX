@@ -55,7 +55,7 @@ class GemmaConfig:
     # Whether a quantized version of the model is used.
     quant: bool = False
     # The path to the model tokenizer.
-    tokenizer: Optional[str] = 'model/gemma-2b-it/tokenizer.model'
+    tokenizer: Optional[str] = 'model/gemma-1.1-2b-it/tokenizer.model'
 
     def get_dtype(self) -> Optional[torch.dtype]:
         """Gets the torch dtype from the config dtype string."""

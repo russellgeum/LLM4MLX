@@ -36,3 +36,8 @@ PyTorch2MLX
 ```
 ## Usage  
 Coming soon
+
+## Reference
+- [Google Gemma Official](https://github.com/google/gemma_pytorch)
+- [HuggingFace gemma-1.1-2b-it](https://huggingface.co/google/gemma-1.1-2b-it)
+- [HuggingFace gemma-1.1-2b-it-pytorch](https://huggingface.co/google/gemma-1.1-2b-it-pytorch)
