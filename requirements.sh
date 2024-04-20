@@ -5,3 +5,5 @@ pip3 install -q -U accelerate==0.27.1
 pip3 install -q -U datasets==2.17.0
 pip3 install -q -U transformers==4.38.1
 pip3 install wandb
+pip3 install safetensors
+pip3 install sentencepiece
