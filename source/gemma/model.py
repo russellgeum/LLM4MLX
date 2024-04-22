@@ -263,14 +263,14 @@ class GemmaAttention(nn.Module):
         batch_size, input_len, _ = hidden_states_shape
 
         qkv = self.qkv_proj(hidden_states)
-        xq, xk, xv = qkv.split([self.q_size, self.kv_size, self.kv_size],
-                               dim=-1)
+        xq, xk, xv = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
 
         xq = xq.view(batch_size, -1, self.num_heads, self.head_dim)
         xk = xk.view(batch_size, -1, self.num_kv_heads, self.head_dim)
         xv = xv.view(batch_size, -1, self.num_kv_heads, self.head_dim)
 
         # Positional embedding.
+        print(xq.shape, freqs_cis.shape)
         xq = apply_rotary_emb(xq, freqs_cis=freqs_cis)
         xk = apply_rotary_emb(xk, freqs_cis=freqs_cis)
 
@@ -414,6 +414,7 @@ class GemmaForCausalLM(nn.Module):
 
         # Pre-compute rotary embedding table.
         rope_theta = getattr(config, 'rope_theta', 10000)
+        print(head_dim, max_seq_len, rope_theta)
         freqs_cis  = precompute_freqs_cis(head_dim, max_seq_len * 2, theta=rope_theta)
         self.register_buffer('freqs_cis', freqs_cis)
 
