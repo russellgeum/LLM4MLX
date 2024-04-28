@@ -7,31 +7,97 @@ from typing import Any, List, Optional, Sequence, Tuple, Union
 import numpy as np
 import mlx
 import mlx.nn as mx
-import mlx.core as mx_core
-from source.gemma import config as gemma_config
+import mlx.core as mxc
+from source.gemma import config
 from source.gemma import tokenizer
 
 
-# def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0) -> mx_core.array:
-#     """
-#     Precomputes the frequency cis.
-#     """
-#     freqs = 1.0 / (theta**(torch.arange(0, dim, 2)[:(dim // 2)].float() / dim))
-#     t     = torch.arange(end, device=freqs.device)
-#     freqs     = torch.outer(t, freqs).float()
-#     freqs_cis = torch.polar(torch.ones_like(freqs), freqs)  # complex64
-#     return freqs_cis
+def MLXprecompute_freqs_cis(dim: int, end: int, theta: float = 10000.0) -> mxc.array:
+    """
+    Precomputes the frequencey cis.
+    """
+    freqs = 1.0 / (theta ** (mxc.arange(0, dim, 2)[:(dim // 2)].astype(mxc.float32) / dim))
+    t = mxc.arange(end)
+    freqs = mxc.outer(t, freqs)
+    cos = mxc.ones_like(freqs) * mxc.cos(freqs)
+    sin = mxc.ones_like(freqs) * mxc.sin(freqs)
+    freq_cis = mxc.stack([cos, sin], axis = -1)
+    return freq_cis
 
 
-# def apply_rotary_emb(x: mx_core.array, freqs_cis: mx_core.array) -> mx_core.array:
-#     """
-#     Applies the rotary embedding to the query and key tensors.
-#     """
-#     x_    = torch.view_as_complex(torch.stack(torch.chunk(x.transpose(1, 2).float(), 2, dim=-1), dim=-1))
-#     x_out = torch.view_as_real(x_ * freqs_cis).type_as(x)
-#     x_out = torch.cat(torch.chunk(x_out, 2, dim=-1), dim=-2)
-#     x_out = x_out.reshape(x_out.shape[0], x_out.shape[1], x_out.shape[2], -1).transpose(1, 2)
-#     return x_out
+def MLXapply_rotary_emb(x: mxc.array, freqs_cis: mxc.array) -> mxc.array:
+    x_transpose = x.transpose(0, 2, 1, 3).astype(mxc.float32) # step 1
+    x_real = x_transpose[:, :, :, :x_transpose.shape[3]//2] # step 2
+    x_imag = x_transpose[:, :, :, x_transpose.shape[3]//2:]
+    x_     = mxc.stack([x_real, x_imag], axis = -1) # step 3 ~ step4
+
+    x_out_real = x_[:, :, :, :, 0] * freqs_cis[:, :, 0] - x_[:, :, :, :, 1] * freqs_cis[:, :, 1] # step 5
+    x_out_imag = x_[:, :, :, :, 1] * freqs_cis[:, :, 0] + x_[:, :, :, :, 0] * freqs_cis[:, :, 1]
+    x_out = mxc.stack([x_out_real, x_out_imag], axis = -1)
+
+    # 해결해야 할 부분
+    x_out__real = x_out[:, :, :, :, 0][:, :, :, :, None]
+    x_out__imag = x_out[:, :, :, :, 1][:, :, :, :, None]
+    x_out = mxc.concatenate([x_out__real, x_out__imag], axis = 3)
+    x_out = mxc.reshape(x_out, (x_out.shape[0], x_out.shape[1], x_out.shape[2], -1)).transpose(0, 2, 1, 3)
+    return x_out
+    
+
+# class Sampler(nn.Module):
+#     def __init__(self, vocab_size: int):
+#         super().__init__()
+#         self.vocab_size = vocab_size
+
+#     @torch.no_grad()
+#     def forward(self,
+#         embedding: torch.Tensor,
+#         hidden_states: torch.Tensor,
+#         output_positions: torch.Tensor,
+#         temperatures: Union[torch.Tensor, None],
+#         top_ps: torch.Tensor,
+#         top_ks: torch.Tensor,
+#         embedding_bias: Optional[torch.Tensor] = None,
+#         ) -> torch.Tensor:
+
+#         # Select the last element for each sequence.
+#         # (batch_size, input_len, hidden_size) -> (batch_size, hidden_size)
+#         hidden_states = hidden_states.index_select(
+#             1, output_positions).squeeze(dim=1)
+#         logits = torch.matmul(hidden_states, embedding.t())
+#         if embedding_bias is not None:
+#             logits += embedding_bias
+
+#         if temperatures is None:
+#             return torch.argmax(logits, dim=-1).squeeze(dim=-1)
+
+#         # Apply temperature scaling.
+#         logits.div_(temperatures.unsqueeze(dim=1))
+
+#         # Calculate probabilities with softmax.
+#         probs = torch.softmax(logits, dim=-1, dtype=torch.float)
+#         probs_sort, probs_idx = torch.sort(probs, dim=-1, descending=True)
+
+#         # Apply top-p, top-k.
+#         probs_sum = torch.cumsum(probs_sort, dim=-1)
+#         top_ps_mask = (probs_sum - probs_sort) > top_ps.unsqueeze(dim=1)
+#         probs_sort = torch.where(top_ps_mask, 0, probs_sort)
+
+#         top_ks_mask = torch.arange(probs_idx.shape[-1],
+#                                    device=probs_idx.device)
+#         top_ks_mask = top_ks_mask.expand(probs_idx.shape[0], -1)
+#         top_ks_mask = top_ks_mask >= top_ks.unsqueeze(dim=1)
+#         probs_sort  = torch.where(top_ks_mask, 0, probs_sort)
+
+#         # Re-normalization.
+#         probs_sort.div_(probs_sort.sum(dim=-1, keepdim=True))
+#         probs = torch.gather(probs_sort,
+#                              dim=-1,
+#                              index=torch.argsort(probs_idx, dim=-1))
+
+#         next_token_ids = torch.multinomial(probs,
+#                                            num_samples=1,
+#                                            replacement=True).squeeze(dim=-1)
+#         return next_token_ids
     
 
 class MLXEmbedding(mx.Module):
@@ -43,7 +109,7 @@ class MLXEmbedding(mx.Module):
         """
         if quant:
             self.embedding     = mx.Embedding(num_embeddings, embedding_dim)
-            self.weight_scaler = mx_core.zeros(shape = [num_embeddings])
+            self.weight_scaler = mxc.zeros(shape = [num_embeddings])
         else:
             self.embedding     = mx.Embedding(num_embeddings, embedding_dim)
         self.quant = quant
@@ -68,15 +134,15 @@ class MLXRMSNorm(mx.Module):
         """
         self.eps = eps
         self.add_unit_offset = add_unit_offset
-        self.weight = mx_core.zeros(shape = [dim])
+        self.weight = mxc.zeros(shape = [dim])
 
     def _norm(self, x):
-        x = x ** 2
-        x = x.mean(-1, keepdims = True)
-        return x * mx_core.rsqrt(x + self.eps)
+        x_ = x ** 2
+        x_ = x_.mean(-1, keepdims = True)
+        return x * mxc.rsqrt(x_ + self.eps)
 
     def __call__(self, x):
-        x = x.astype(mx_core.float32)
+        x = x.astype(mxc.float32)
         x = self._norm(x).astype(x.dtype)
 
         if self.add_unit_offset:
@@ -95,10 +161,10 @@ class MLXLinear(mx.Module):
         2. Quantization을 한다면, out_feuatre로 weight_scaler를 만들어서 곱한다.
         """
         if quant:
-            self.weight        = mx_core.zeros(shape = [in_features, out_features], dtype = mx_core.int8)
-            self.weight_scaler = mx_core.zeros(shape = [out_features])
+            self.weight        = mxc.zeros(shape = [in_features, out_features], dtype = mxc.int8)
+            self.weight_scaler = mxc.zeros(shape = [out_features])
         else:
-            self.weight        = mx_core.zeros(shape = [in_features, out_features], dtype = mx_core.int8)
+            self.weight        = mxc.zeros(shape = [in_features, out_features], dtype = mxc.int8)
         self.quant = quant
 
     def __call__(self, x):
@@ -117,13 +183,13 @@ class MLXGemmaMLP(mx.Module):
         quant: bool,
         ):
         super().__init__()
-        self.phi = mx_core.array(np.pi)
+        self.phi = mxc.array(np.pi)
         self.gate_proj = MLXLinear(hidden_size, intermediate_size, quant)
         self.up_proj   = MLXLinear(hidden_size, intermediate_size, quant)
         self.down_proj = MLXLinear(intermediate_size, hidden_size, quant)
 
     def gelu_appro_tanh(self, x):
-        output = 0.5 * x * (1 + mx_core.tanh(mx_core.sqrt(2/self.phi) * (x + 0.044715 * (x ** 3))))
+        output = 0.5 * x * (1 + mxc.tanh(mxc.sqrt(2/self.phi) * (x + 0.044715 * (x ** 3))))
         return output
         
     def __call__(self, x):
@@ -150,66 +216,70 @@ class MLXGemmaAttention(mx.Module):
         self.q_size      = self.num_heads * self.head_dim
         self.kv_size     = self.num_kv_heads * self.head_dim
         self.scaling     = self.head_dim**-0.5
-        self.qkv_proj    = MLXLinear(self.hidden_size, (self.num_heads + 2 * self.num_kv_heads) * self.head_dim, quant=quant)
-        self.o_proj      = MLXLinear(self.num_heads * self.head_dim, self.hidden_size, quant=quant)
+        self.qkv_proj    = MLXLinear(
+            self.hidden_size, (self.num_heads + 2 * self.num_kv_heads) * self.head_dim, quant=quant)
+        self.o_proj      = MLXLinear(
+            self.num_heads * self.head_dim, self.hidden_size, quant=quant)
 
     def __call__(self, 
-        hidden_states: mx_core.array, 
-        freqs_cis: mx_core.array,
-        kv_write_indices: mx_core.array,
-        kv_cache: Tuple[mx_core.array, mx_core.array], 
-        mask: mx_core.array) -> mx_core.array:
+        hidden_states: mxc.array, 
+        freqs_cis: mxc.array,
+        kv_write_indices: mxc.array,
+        kv_cache: Tuple[mxc.array, mxc.array], 
+        mask: mxc.array) -> mxc.array:
         hidden_states_shape = hidden_states.shape
         assert len(hidden_states_shape) == 3
 
         batch_size, input_len, _ = hidden_states_shape
-
         qkv = self.qkv_proj(hidden_states)
-        xq, xk, xv = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
-
-        xq = xq.view(batch_size, -1, self.num_heads, self.head_dim)
-        xk = xk.view(batch_size, -1, self.num_kv_heads, self.head_dim)
-        xv = xv.view(batch_size, -1, self.num_kv_heads, self.head_dim)
+        xq = qkv[:, :, :self.q_size]
+        xk = qkv[:, :, self.q_size:self.q_size + self.kv_size]
+        xv = qkv[:, :, self.q_size+self.kv_size:]
+        xq = xq.reshape(batch_size, -1, self.num_heads, self.head_dim)
+        xk = xk.reshape(batch_size, -1, self.num_kv_heads, self.head_dim)
+        xv = xv.reshape(batch_size, -1, self.num_kv_heads, self.head_dim)
 
         # Positional embedding.
-        xq = apply_rotary_emb(xq, freqs_cis=freqs_cis)
-        xk = apply_rotary_emb(xk, freqs_cis=freqs_cis)
+        xq = MLXapply_rotary_emb(xq, freqs_cis=freqs_cis)
+        xk = MLXapply_rotary_emb(xk, freqs_cis=freqs_cis)
 
         # Write new kv cache.
         # [batch_size, input_len, n_local_kv_heads, head_dim]
+        # cache의 kv_write_indices 인덱스를 xk의 kv_write_indices로 채우기
         k_cache, v_cache = kv_cache
-        k_cache.index_copy_(1, kv_write_indices, xk)
-        v_cache.index_copy_(1, kv_write_indices, xv)
-
-        key = k_cache
+        k_cache[:, kv_write_indices, ...] = xk[:, kv_write_indices, ...]
+        v_cache[:, kv_write_indices, ...] = xv[:, kv_write_indices, ...]
+    
+        key   = k_cache
         value = v_cache
         if self.num_kv_heads != self.num_heads:
             # [batch_size, max_seq_len, n_local_heads, head_dim]
-            key   = torch.repeat_interleave(key, self.num_queries_per_kv, dim=2)
-            value = torch.repeat_interleave(value, self.num_queries_per_kv, dim=2)
+            key   = mxc.repeat(key, self.num_queries_per_kv, axis = 2)
+            value = mxc.repeat(value, self.num_queries_per_kv, axis = 2)
 
         # [batch_size, n_local_heads, input_len, head_dim]
-        q = xq.transpose(1, 2)
+        q = xq.transpose(0, 2, 1, 3)
         # [batch_size, n_local_heads, max_seq_len, head_dim]
-        k = key.transpose(1, 2)
-        v = value.transpose(1, 2)
+        k = key.transpose(0, 2, 1, 3)
+        v = value.transpose(0, 2, 1, 3)
 
         # [batch_size, n_local_heads, input_len, max_seq_len]
-        scores = torch.matmul(q, k.transpose(2, 3)) * self.scaling
+        scores = mxc.matmul(q, k.transpose(0, 1, 3, 2)) * self.scaling
         scores = scores + mask
-        scores = F.softmax(scores.float(), dim=-1).type_as(q)
+        scores = mxc.softmax(scores.astype(mxc.float32), axis=-1).astype(q.dtype)
 
         # [batch_size, n_local_heads, input_len, head_dim]
-        output = torch.matmul(scores, v)
+        output = mxc.matmul(scores, v)
 
         # [batch_size, input_len, hidden_dim]
-        output = (output.transpose(1, 2).contiguous().view(batch_size, input_len, -1))
+        # output = (output.transpose(0, 2, 1, 3).contiguous().view(batch_size, input_len, -1))
+        output = output.transpose(0, 2, 1, 3).reshape(batch_size, input_len, -1)
         output = self.o_proj(output)
         return output
 
 
 class MLXGemmaDecoderLayer(mx.Module):
-    def __init__(self, config: gemma_config.GemmaConfig):
+    def __init__(self, config):
         super().__init__()
         self.self_attn = MLXGemmaAttention(
             hidden_size=config.hidden_size,
@@ -220,17 +290,20 @@ class MLXGemmaDecoderLayer(mx.Module):
             )
         self.mlp = MLXGemmaMLP(
             hidden_size=config.hidden_size, intermediate_size=config.intermediate_size, quant=config.quant)
-        self.input_layernorm = MLXRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.input_layernorm          = MLXRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = MLXRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
-    def forward(self,
-        hidden_states: mx_core.array,
-        freqs_cis: mx_core.array,
-        kv_write_indices: mx_core.array,
-        kv_cache: Tuple[mx_core.array, mx_core.array],
-        mask: mx_core.array,
-        ) -> mx_core.array:
-
+    def __call__(self,
+        hidden_states: mxc.array,
+        freqs_cis: mxc.array,
+        kv_write_indices: mxc.array,
+        kv_cache: Tuple[mxc.array, mxc.array],
+        mask: mxc.array,
+        ) -> mxc.array:
+        """
+        1. hidden -> RMSNorm -> GemmaAttention = hidden + residual
+        2. hidden -> RMXNorm -> GemmaMLP -> hidden + residual
+        """
         # Self Attention
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
@@ -252,7 +325,7 @@ class MLXGemmaDecoderLayer(mx.Module):
 
 
 class MLXGemmaModel(mx.Module):
-    def __init__(self, config: gemma_config.GemmaConfig):
+    def __init__(self, config):
         super().__init__()
         """
         gemma-2b의 경우 num_hidden_layers = 18
@@ -266,14 +339,13 @@ class MLXGemmaModel(mx.Module):
             self.layers.append(MLXGemmaDecoderLayer(config))
         self.norm   = MLXRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
-    def forward(
-        self,
-        hidden_states: mx_core.array,
-        freqs_cis: mx_core.array,
-        kv_write_indices: mx_core.array,
-        kv_caches: List[Tuple[mx_core.array, mx_core.array]],
-        mask: mx_core.array,
-        ) -> mx_core.array:
+    def __call__(self,
+        hidden_states: mxc.array,
+        freqs_cis: mxc.array,
+        kv_write_indices: mxc.array,
+        kv_caches: List[Tuple[mxc.array, mxc.array]],
+        mask: mxc.array,
+        ) -> mxc.array:
 
         for i in range(len(self.layers)):
             # nn.ModuleList의 GemmaDecoderLayer를 순회

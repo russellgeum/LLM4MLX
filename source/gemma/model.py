@@ -20,7 +20,7 @@ from typing import Any, List, Optional, Sequence, Tuple, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from source.gemma import config as gemma_config
+from source.gemma import config
 from source.gemma import tokenizer
 
 
@@ -52,8 +52,7 @@ class Sampler(nn.Module):
         self.vocab_size = vocab_size
 
     @torch.no_grad()
-    def forward(
-        self,
+    def forward(self,
         embedding: torch.Tensor,
         hidden_states: torch.Tensor,
         output_positions: torch.Tensor,
@@ -133,8 +132,7 @@ class Embedding(nn.Module):
 
 
 class RMSNorm(torch.nn.Module):
-    def __init__(
-        self,
+    def __init__(self,
         dim: int,
         eps: float = 1e-6,
         add_unit_offset: bool = True,
@@ -190,8 +188,7 @@ class Linear(nn.Module):
 
 
 class GemmaMLP(nn.Module):
-    def __init__(
-        self,
+    def __init__(self,
         hidden_size: int,
         intermediate_size: int,
         quant: bool,
@@ -211,8 +208,7 @@ class GemmaMLP(nn.Module):
 
 
 class GemmaAttention(nn.Module):
-    def __init__(
-        self,
+    def __init__(self,
         hidden_size: int,
         num_heads: int,
         num_kv_heads: int,
@@ -220,74 +216,58 @@ class GemmaAttention(nn.Module):
         quant: bool,
         ):
         super().__init__()
-
-        self.num_heads = num_heads
+        self.num_heads    = num_heads
         self.num_kv_heads = num_kv_heads
-
         assert self.num_heads % self.num_kv_heads == 0
         self.num_queries_per_kv = self.num_heads // self.num_kv_heads
 
-        self.hidden_size = hidden_size
-        self.head_dim = head_dim
-
-        self.q_size = self.num_heads * self.head_dim
+        self.hidden_size  = hidden_size
+        self.head_dim     = head_dim
+        # q 사이즈는 heads 수에 head_dim을 곱함
+        # kv 사이즈는 kv heads 수에 head_dim을 곱함
+        self.q_size  = self.num_heads * self.head_dim
         self.kv_size = self.num_kv_heads * self.head_dim
-
         self.scaling = self.head_dim**-0.5
 
         self.qkv_proj = Linear(
-            self.hidden_size,
-            (self.num_heads + 2 * self.num_kv_heads) * self.head_dim,
-            quant=quant)
-        self.o_proj = Linear(
-            self.num_heads * self.head_dim,
-            self.hidden_size,
-            quant=quant)
+            self.hidden_size, (self.num_heads + 2 * self.num_kv_heads) * self.head_dim, quant=quant)
+        self.o_proj   = Linear(
+            self.num_heads * self.head_dim, self.hidden_size, quant=quant)
 
-    def forward(
-        self,
+    def forward(self,
         hidden_states: torch.Tensor,
         freqs_cis: torch.Tensor,
         kv_write_indices: torch.Tensor,
         kv_cache: Tuple[torch.Tensor, torch.Tensor],
         mask: torch.Tensor,
         ) -> torch.Tensor:
-        # print("hidden_states   ", hidden_states)
-        # print("freq_cis        ", freqs_cis)
-        # print("kv_write_indices", kv_write_indices)
-        # print("kv_cache        ", kv_cache)
-        # print("mask            ", mask)
         hidden_states_shape = hidden_states.shape
         assert len(hidden_states_shape) == 3
-
-        batch_size, input_len, _ = hidden_states_shape
-
+        
+        batch_size, input_len, _ = hidden_states_shape # [B, L, D]
         qkv = self.qkv_proj(hidden_states)
         xq, xk, xv = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
-
         xq = xq.view(batch_size, -1, self.num_heads, self.head_dim)
         xk = xk.view(batch_size, -1, self.num_kv_heads, self.head_dim)
         xv = xv.view(batch_size, -1, self.num_kv_heads, self.head_dim)
 
         # Positional embedding.
-        print(xq.shape, freqs_cis.shape)
         xq = apply_rotary_emb(xq, freqs_cis=freqs_cis)
         xk = apply_rotary_emb(xk, freqs_cis=freqs_cis)
 
         # Write new kv cache.
         # [batch_size, input_len, n_local_kv_heads, head_dim]
+        # xk의 kv_write_indices 인덱스에 1로 채우기
         k_cache, v_cache = kv_cache
         k_cache.index_copy_(1, kv_write_indices, xk)
         v_cache.index_copy_(1, kv_write_indices, xv)
 
-        key = k_cache
+        key   = k_cache
         value = v_cache
         if self.num_kv_heads != self.num_heads:
             # [batch_size, max_seq_len, n_local_heads, head_dim]
-            key = torch.repeat_interleave(key, self.num_queries_per_kv, dim=2)
-            value = torch.repeat_interleave(value,
-                                            self.num_queries_per_kv,
-                                            dim=2)
+            key   = torch.repeat_interleave(key, self.num_queries_per_kv, dim = 2)
+            value = torch.repeat_interleave(value, self.num_queries_per_kv, dim = 2)
 
         # [batch_size, n_local_heads, input_len, head_dim]
         q = xq.transpose(1, 2)
@@ -304,14 +284,13 @@ class GemmaAttention(nn.Module):
         output = torch.matmul(scores, v)
 
         # [batch_size, input_len, hidden_dim]
-        output = (output.transpose(1, 2).contiguous().view(
-            batch_size, input_len, -1))
+        output = (output.transpose(1, 2).contiguous().view(batch_size, input_len, -1))
         output = self.o_proj(output)
         return output
 
 
 class GemmaDecoderLayer(nn.Module):
-    def __init__(self, config: gemma_config.GemmaConfig):
+    def __init__(self, config):
         super().__init__()
         self.self_attn = GemmaAttention(
             hidden_size=config.hidden_size,
@@ -328,15 +307,17 @@ class GemmaDecoderLayer(nn.Module):
         self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
-    def forward(
-        self,
+    def forward(self,
         hidden_states: torch.Tensor,
         freqs_cis: torch.Tensor,
         kv_write_indices: torch.Tensor,
         kv_cache: Tuple[torch.Tensor, torch.Tensor],
         mask: torch.Tensor,
         ) -> torch.Tensor:
-
+        """
+        1. hidden -> RMSNorm -> GemmaAttention = hidden + residual
+        2. hidden -> RMXNorm -> GemmaMLP -> hidden + residual
+        """
         # Self Attention
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
@@ -354,15 +335,15 @@ class GemmaDecoderLayer(nn.Module):
         hidden_states = self.post_attention_layernorm(hidden_states)
         hidden_states = self.mlp(hidden_states)
         hidden_states = residual + hidden_states
-
         return hidden_states
 
 
 class GemmaModel(nn.Module):
-    def __init__(self, config: gemma_config.GemmaConfig):
+    def __init__(self, config):
         super().__init__()
         """
         gemma-2b의 경우 num_hidden_layers = 18
+        gemma-7b의 경우 num_hidden_layers = 28
         """
         self.config     = config
         self.vocab_size = config.vocab_size
@@ -372,8 +353,7 @@ class GemmaModel(nn.Module):
             self.layers.append(GemmaDecoderLayer(config))
         self.norm   = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
-    def forward(
-        self,
+    def forward(self,
         hidden_states: torch.Tensor,
         freqs_cis: torch.Tensor,
         kv_write_indices: torch.Tensor,
@@ -381,6 +361,8 @@ class GemmaModel(nn.Module):
         mask: torch.Tensor,
         ) -> torch.Tensor:
 
+        # hidden_states, freqs_cis, kv_write_indeices, kv_caches, mask를 입력받아서,
+        # gemma-2b는 디코더 레이어 18번 반복
         for i in range(len(self.layers)):
             # nn.ModuleList의 GemmaDecoderLayer를 순회
             layer = self.layers[i]
@@ -393,20 +375,19 @@ class GemmaModel(nn.Module):
                 )
             
         # 마지막 RMSNorm 레이어 포워드
-        hidden_states = self.norm(hidden_states)
+        hidden_states = self.norm(hidden_states)        
         return hidden_states
 
 
 class GemmaForCausalLM(nn.Module):
-    def __init__(self, config: gemma_config.GemmaConfig):
+    def __init__(self, config):
         super().__init__()
         self.config = config
         assert config.hidden_size % config.num_attention_heads == 0
-
-        max_seq_len = config.max_position_embeddings
-        head_dim    = config.head_dim
-        vocab_size  = config.vocab_size
-        print(config.tokenizer)
+        print("dtype :   ", config.dtype)
+        max_seq_len    = config.max_position_embeddings
+        head_dim       = config.head_dim
+        vocab_size     = config.vocab_size
         self.tokenizer = tokenizer.Tokenizer(config.tokenizer)
         self.embedder  = Embedding(vocab_size, config.hidden_size, config.quant)
         self.model     = GemmaModel(config)
@@ -414,13 +395,11 @@ class GemmaForCausalLM(nn.Module):
 
         # Pre-compute rotary embedding table.
         rope_theta = getattr(config, 'rope_theta', 10000)
-        print(head_dim, max_seq_len, rope_theta)
         freqs_cis  = precompute_freqs_cis(head_dim, max_seq_len * 2, theta=rope_theta)
         self.register_buffer('freqs_cis', freqs_cis)
 
     @torch.no_grad()
-    def forward(
-        self,
+    def forward(self,
         input_token_ids: torch.Tensor,
         input_positions: torch.Tensor,
         kv_write_indices: torch.Tensor,
@@ -435,11 +414,13 @@ class GemmaForCausalLM(nn.Module):
         freqs_cis        = self.freqs_cis.index_select(0, input_positions)
         kv_write_indices = input_positions
 
-        # [batch_size, input_len, hidden_size]
+        # 프롬프트 아이디를 임베딩: 해당되는 단어 아이디만 2048 차원 벡터로 변환하여 행렬 구성
+        # embedder.weight.shape = [batch_size, 256000, 2048]
         hidden_states = self.embedder(input_token_ids)
+        # hidden_states.shape = [batch_size, input_len, 2048]
         # Gemma normalizes the embedding by sqrt(hidden_size).
-        hidden_states = hidden_states * (self.config.hidden_size**0.5)
-
+        hidden_states = hidden_states * (self.config.hidden_size**0.5) 
+ 
         hidden_states = self.model(
             hidden_states=hidden_states,
             freqs_cis=freqs_cis,
@@ -462,8 +443,7 @@ class GemmaForCausalLM(nn.Module):
             )
         return next_tokens
 
-    def generate(
-        self,
+    def generate(self,
         prompts: Union[str, Sequence[str]],
         device: Any,
         output_len: int = 100,
@@ -480,11 +460,11 @@ class GemmaForCausalLM(nn.Module):
         if is_str_prompt:
             prompts = [prompts]
 
-        batch_size     = len(prompts)
-        prompt_tokens  = [self.tokenizer.encode(prompt) for prompt in prompts]
-        min_prompt_len = min(len(p) for p in prompt_tokens)
-        max_prompt_len = max(len(p) for p in prompt_tokens)
-        max_seq_len    = max_prompt_len + output_len
+        batch_size     = len(prompts) # 1개의 문장이면 batch_size = 1
+        prompt_tokens  = [self.tokenizer.encode(prompt) for prompt in prompts] # 배치의 각 프롬프트트들을 인코딩
+        min_prompt_len = min(len(p) for p in prompt_tokens) # 숫자로 표현한 프롬프트들 중 가장 짧은 프롬프트 길이
+        max_prompt_len = max(len(p) for p in prompt_tokens) # 숫자로 표현한 프롬프트들 중 가장 긴 프롬프트 길이
+        max_seq_len    = max_prompt_len + output_len # 출력 길이는 100
         assert max_seq_len <= self.config.max_position_embeddings
 
 
@@ -500,10 +480,8 @@ class GemmaForCausalLM(nn.Module):
 
 
         # HC: 프롬프트를 토크나이징하고, 숫자 아이디로 매핑
-        token_ids_tensor      = torch.full(
-            (batch_size, max_seq_len), self.tokenizer.pad_id, dtype=torch.int64)
-        input_token_ids_tensor = torch.full(
-            (batch_size, min_prompt_len), self.tokenizer.pad_id, dtype=torch.int64)
+        token_ids_tensor       = torch.full((batch_size, max_seq_len), self.tokenizer.pad_id, dtype=torch.int64)
+        input_token_ids_tensor = torch.full((batch_size, min_prompt_len), self.tokenizer.pad_id, dtype=torch.int64)
         for i, p in enumerate(prompt_tokens):
             token_ids_tensor[i, :len(p)] = torch.tensor(p)
             input_token_ids_tensor[i, :min_prompt_len] = torch.tensor(p[:min_prompt_len])
@@ -521,10 +499,12 @@ class GemmaForCausalLM(nn.Module):
         top_ks_tensor = torch.LongTensor([top_k] * batch_size)
         output_index  = torch.tensor(min_prompt_len, dtype=torch.int64)
 
-
-        # HC: 실제 모델 포워드, Prefill up to min_prompt_len tokens, then treat other prefill as
-        # decode and ignore output.
+        # HC: 실제 모델 포워드, 
+        # max_sqe_len - min_prompt_len의 의미: 아마도 2개 이상의 배치를 추론할때 토큰 길이를 맞추기 위해서이지 않을까?
         for i in range(max_seq_len - min_prompt_len):
+            # 처음에는 입력 프롬프트 전체를 넣고, 입력 프롬프트를 통해 K, V를 연산하여 보관
+            # 두 번째부터는 출력 토큰을 다시 입력으로 넣어서 다음 언어를 K, V를 참고하여 예측
+            # 각 출력마다 다음 단어를 예측하고 이들을 모아서 하나의 출력 문장을 구성
             next_token_ids = self(
                 input_token_ids=input_token_ids_tensor, # tensor([[   2,  651, 6996,  576, 1913,  603]])
                 input_positions=input_positions_tensor, # tensor([0, 1, 2, 3, 4, 5])
@@ -548,6 +528,8 @@ class GemmaForCausalLM(nn.Module):
             output_positions_tensor = torch.tensor(0, dtype=torch.int64)
             output_index = output_index + 1
 
+            if i == 0:
+                break
 
         # HC: 디토크나이징 과정, token_ids_tensor를 문장으로 치환
         token_ids = token_ids_tensor.tolist()
@@ -563,4 +545,6 @@ class GemmaForCausalLM(nn.Module):
         return results[0] if is_str_prompt else results
 
     def load_weights(self, model_path: str):
-        self.load_state_dict(torch.load(model_path, mmap=True, weights_only=True,)['model_state_dict'], strict=False)
+        print(model_path)
+        weight = torch.load(model_path, mmap=True, weights_only=True)
+        self.load_state_dict(weight['model_state_dict'], strict=False)

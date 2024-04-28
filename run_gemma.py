@@ -34,6 +34,7 @@ def main(args):
     model_config = config.get_model_config(args.variant)
     model_config.dtype = "float32" if args.device == "cpu" else "float16"
     model_config.quant = args.quant
+    model_config.dtype = "float16"
 
     # Seed random.
     random.seed(args.seed)
@@ -74,5 +75,4 @@ if __name__ == "__main__":
     parser.add_argument("--quant", action='store_true')
     parser.add_argument("--prompt", type=str, default="The meaning of life is")
     args = parser.parse_args()
-
     main(args)
