@@ -535,12 +535,12 @@ class GemmaForCausalLM(nn.Module):
         token_ids = token_ids_tensor.tolist()
         results = []
         for i, tokens in enumerate(token_ids):
-            trimmed_output = tokens[len(prompt_tokens[i]):len(prompt_tokens[i])
-                                    + output_len]
+            trimmed_output = tokens[len(prompt_tokens[i]):len(prompt_tokens[i]) + output_len]
             if self.tokenizer.eos_id in trimmed_output:
                 eos_index = trimmed_output.index(self.tokenizer.eos_id)
                 trimmed_output = trimmed_output[:eos_index]
             results.append(self.tokenizer.decode(trimmed_output))
+            
         # 하나의 문장으로 반환
         return results[0] if is_str_prompt else results
 

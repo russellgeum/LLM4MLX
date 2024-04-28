@@ -6,10 +6,12 @@ Future Directions:
 3. Understand methods to optimize and accelerate MLX LLM models for inference.
 
 ## To Do
-~~0. 완료한 것: class MLXGemmaMLP 레벨까지 연산 결과 일치한 것을 확인~~
-1. source/gemma/model_mlx의 class MLXGemmaAttention을 MLX 형태로 변환 (현재 이 부분만 PyTorch 코드)
-3. safetensor 모듈을 불러와서 torch weight -> MLX weight로 이식 코드 구현
-4. run_gemma.py를 MLX 모델을 빌드하고 weight를 심어다가 추론하는 것을 실행하는 코드로 작성
+1. GemmaModel, MLXGemmaModel이 같은 것을 확인  
+   torch safetensor -> MLX safetensor와 torch ckpt -> MLX safetensor의 MLX 모델 추론이 동일 (당연히 같아야 함)
+   torch safetensor는 q, k, v가 분리되어 있음 이를 qkv로 묶으면 torch ckpt의 추론이 동일함 (당연히 같아야 함)
+2. Sampler와 디코딩 단계 구현하여 붙이기
+3. Tokenizer 붙이기
+4. weight를 옮기는 것은 test_model.py에서 가구현
 
 ## Requirements
 ```
