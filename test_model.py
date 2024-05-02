@@ -1,3 +1,4 @@
+import time
 import copy
 import numpy as np
 import mlx
@@ -145,112 +146,151 @@ def getInput(tensors):
 
 
     ## Model Define
-    embedder  = Embedding(vocab_size, config.hidden_size, config.quant)
-    value     = tensors.get("embedder.weight", tensors.get("embed_tokens.weight", "Key not found"))
+    embedder    = Embedding(vocab_size, config.hidden_size, config.quant)
+    mlxembedder = MLXEmbedding(vocab_size, config.hidden_size, config.quant)
+    value       = tensors.get("embedder.weight", tensors.get("embed_tokens.weight", "Key not found"))
     embedder.weight = nn.Parameter(value.type(torch.float32))
+    mlxembedder.embedding.weight = mxc.array(value.numpy())
 
     # 프롬프트 아이디를 임베딩: 해당되는 단어 아이디만 2048 차원 벡터로 변환하여 행렬 구성
     # embedder.weight.shape = [batch_size, 256000, 2048]
     # hidden_states.shape = [batch_size, input_len, 2048]
-    hidden_states = embedder(input_token_ids_tensor)
+    hidden_states     = embedder(input_token_ids_tensor)
+    mlx_hideen_states = mlxembedder(mxc.array(input_token_ids_tensor.numpy()))
+
     # Gemma normalizes the embedding by sqrt(hidden_size).
-    hidden_states = hidden_states * (config.hidden_size**0.5) 
-
-    return hidden_states, freqs_cis, mlx_freqs_cis, kv_write_indices, kv_caches, mlx_kv_caches, curr_mask_tensor, config
-
-
-## Load weight torch
-# torch_weight = torch.load("model/gemma-1.1-2b-it/gemma-1.1-2b-it.ckpt", mmap=True, weights_only=True)["model_state_dict"]
-
-# 1. 모델 웨이트 로드
-torch_weight = getWeight()
-# 2. 모델 웨이트의 model. 키 제거 torch_weight -> new_weight
-new_weight = {}
-for key in torch_weight:
-    new_key = key.replace("model.", "")
-    new_weight[new_key] = torch_weight[key]
+    hidden_states     = hidden_states * (config.hidden_size**0.5) 
+    mlx_hideen_states = mlx_hideen_states * (config.hidden_size**0.5)
 
 
-## PyTorch Gemma
-hidden_states, freqs_cis, mlx_freqs_cis, kv_write_indices, kv_caches, mlx_kv_caches, mask, config = getInput(new_weight)
-print("hidden_state shape:  ", hidden_states.shape, hidden_states.device)
-print("freqs_cis shape   :  ", freqs_cis.shape, freqs_cis.device)
-print("kv_caches         :  ", kv_caches[0][0].shape, kv_caches[0][0].device)
-print("kv_write_indices  :  ", kv_write_indices.shape, kv_write_indices.device)
-print("curr_mask_tensor  :  ", mask.shape, mask.device)
+    # print("hidden_state shape:  ", hidden_states.shape, hidden_states.device)
+    # print("freqs_cis shape   :  ", freqs_cis.shape, freqs_cis.device)
+    # print("kv_caches         :  ", kv_caches[0][0].shape, kv_caches[0][0].device)
+    # print("kv_write_indices  :  ", kv_write_indices.shape, kv_write_indices.device)
+    # print("curr_mask_tensor  :  ", curr_mask_tensor.shape, curr_mask_tensor.device)
 
 
-torch_model = GemmaModel(config)
-torch_model.load_state_dict(new_weight, strict=False)
-with torch.no_grad():
-    output = torch_model(
-        hidden_states=hidden_states,
-        freqs_cis=freqs_cis,
-        kv_write_indices=kv_write_indices,
-        kv_caches=kv_caches,
-        mask=mask,
-        )
-    print("파이토치 모델 추론 결과")
-    print(output, output.dtype)
+    # 모델 웨이트의 model. 키 제거 torch_weight -> new_weight
+    new_weight = {}
+    for key in tensors:
+        new_key = key.replace("model.", "")
+        new_weight[new_key] = tensors[key]
+
+    torch_model = GemmaModel(config)
+    sampler     = Sampler(vocab_size)
+    torch_model.load_state_dict(new_weight, strict=False)
+    with torch.no_grad():
+        time0 = time.time()
+        hidden_states = torch_model(
+            hidden_states=hidden_states,
+            freqs_cis=freqs_cis,
+            kv_write_indices=kv_write_indices,
+            kv_caches=kv_caches,
+            mask=curr_mask_tensor,
+            )
+        print("파이토치 모델 추론 결과")
+        print(hidden_states, hidden_states.dtype)
+
+        # HC: embedder의 weight를 reuse한다.
+        embedder_weight = embedder.weight
+        if config.quant:
+            embedder_weight = (embedder_weight * embedder.weight_scaler.unsqueeze(-1))
+
+        next_tokens = sampler(
+            embedding=embedder_weight,
+            hidden_states=hidden_states,
+            output_positions=output_positions_tensor,
+            temperatures=temperatures_tensor,
+            top_ps=top_ps_tensor,
+            top_ks=top_ks_tensor,
+            )
+        print("다음 예측한 토큰")
+        print(next_tokens)
+        print("애플 실리콘 토치 추론 시간: ", time.time() - time0)
+        
 
 
-## Load weight mlx
-mlx_weight = mxc.load("model/gemma-1.1-2b-it/safe_mlx_model.safetensors")
-model = MLXGemmaModel(config)
-for idx in range(len(model.layers)):
-    model.layers[idx].input_layernorm.weight = mlx_weight[
-        "model.layers.{}.input_layernorm.weight".format(idx)]
-    model.layers[idx].self_attn.qkv_proj.weight = mlx_weight[
-        "model.layers.{}.self_attn.qkv_proj.weight".format(idx)]
-    model.layers[idx].self_attn.o_proj.weight = mlx_weight[
-        "model.layers.{}.self_attn.o_proj.weight".format(idx)]
-    model.layers[idx].mlp.gate_proj.weight = mlx_weight[
-        "model.layers.{}.mlp.gate_proj.weight".format(idx)]
-    model.layers[idx].mlp.up_proj.weight = mlx_weight[
-        "model.layers.{}.mlp.up_proj.weight".format(idx)]
-    model.layers[idx].mlp.down_proj.weight = mlx_weight[
-        "model.layers.{}.mlp.down_proj.weight".format(idx)]
-    model.layers[idx].post_attention_layernorm.weight = mlx_weight[
-        "model.layers.{}.post_attention_layernorm.weight".format(idx)]
-model.norm.weight = mlx_weight["model.norm.weight"]
+    ## Load weight mlx
+    mlx_weight = mxc.load("model/gemma-1.1-2b-it/safe_mlx_model.safetensors")
+    model = MLXGemmaModel(config)
+    mlxsampler  = MLXSampler(vocab_size)
+    for idx in range(len(model.layers)):
+        model.layers[idx].input_layernorm.weight = mlx_weight[
+            "model.layers.{}.input_layernorm.weight".format(idx)]
+        model.layers[idx].self_attn.qkv_proj.weight = mlx_weight[
+            "model.layers.{}.self_attn.qkv_proj.weight".format(idx)]
+        model.layers[idx].self_attn.o_proj.weight = mlx_weight[
+            "model.layers.{}.self_attn.o_proj.weight".format(idx)]
+        model.layers[idx].mlp.gate_proj.weight = mlx_weight[
+            "model.layers.{}.mlp.gate_proj.weight".format(idx)]
+        model.layers[idx].mlp.up_proj.weight = mlx_weight[
+            "model.layers.{}.mlp.up_proj.weight".format(idx)]
+        model.layers[idx].mlp.down_proj.weight = mlx_weight[
+            "model.layers.{}.mlp.down_proj.weight".format(idx)]
+        model.layers[idx].post_attention_layernorm.weight = mlx_weight[
+            "model.layers.{}.post_attention_layernorm.weight".format(idx)]
+    model.norm.weight = mlx_weight["model.norm.weight"]
 
-with torch.no_grad():
-    output = model(
-        hidden_states=mxc.array(hidden_states.detach().numpy()),
-        freqs_cis=mlx_freqs_cis,
-        kv_write_indices=mxc.array(kv_write_indices.numpy()),
-        kv_caches=mlx_kv_caches,
-        mask=mxc.array(mask.numpy()),
-        )
-    print("safe from MLX 모델 추론 결과")
-    print(output)
+    with torch.no_grad():
+        time1 = time.time()
+        mlxhidden_states = model(
+            hidden_states=mlx_hideen_states,
+            freqs_cis=mlx_freqs_cis,
+            kv_write_indices=mxc.array(kv_write_indices.numpy()),
+            kv_caches=mlx_kv_caches,
+            mask=mxc.array(curr_mask_tensor.numpy()),
+            )
+        print("safe from MLX 모델 추론 결과")
+        print(mlxhidden_states)
 
-mlx_weight = mxc.load("model/gemma-1.1-2b-it/ckpt_mlx_model.safetensors")
-model = MLXGemmaModel(config)
-for idx in range(len(model.layers)):
-    model.layers[idx].input_layernorm.weight = mlx_weight[
-        "model.layers.{}.input_layernorm.weight".format(idx)]
-    model.layers[idx].self_attn.qkv_proj.weight = mlx_weight[
-        "model.layers.{}.self_attn.qkv_proj.weight".format(idx)]
-    model.layers[idx].self_attn.o_proj.weight = mlx_weight[
-        "model.layers.{}.self_attn.o_proj.weight".format(idx)]
-    model.layers[idx].mlp.gate_proj.weight = mlx_weight[
-        "model.layers.{}.mlp.gate_proj.weight".format(idx)]
-    model.layers[idx].mlp.up_proj.weight = mlx_weight[
-        "model.layers.{}.mlp.up_proj.weight".format(idx)]
-    model.layers[idx].mlp.down_proj.weight = mlx_weight[
-        "model.layers.{}.mlp.down_proj.weight".format(idx)]
-    model.layers[idx].post_attention_layernorm.weight = mlx_weight[
-        "model.layers.{}.post_attention_layernorm.weight".format(idx)]
-model.norm.weight = mlx_weight["model.norm.weight"]
+        # HC: mlxembedder의 weight를 reuse한다.
+        mlxembedder_weight = mlxembedder.embedding.weight
+        if config.quant:
+            mlxembedder_weight = (mlxembedder_weight * mlxembedder.weight_scaler.unsqueeze(-1))
 
-with torch.no_grad():
-    output = model(
-        hidden_states=mxc.array(hidden_states.detach().numpy()),
-        freqs_cis=mlx_freqs_cis,
-        kv_write_indices=mxc.array(kv_write_indices.numpy()),
-        kv_caches=mlx_kv_caches,
-        mask=mxc.array(mask.numpy()),
-        )
-    print("ckpt from MLX 모델 추론 결과")
-    print(output)
+        mlxnext_tokens = mlxsampler(
+            embedding=mlxembedder_weight,
+            hidden_states=mlxhidden_states,
+            output_positions=mxc.array(output_positions_tensor.numpy()),
+            temperatures=mxc.array(temperatures_tensor.numpy()),
+            top_ps=mxc.array(top_ps_tensor.numpy()),
+            top_ks=mxc.array(top_ks_tensor.numpy()),
+            )
+        print("다음 예측한 토큰")
+        print(mlxnext_tokens)
+        print("애플 실리콘 MLX 추론 시간: ", time.time() - time1)
+
+    # mlx_weight = mxc.load("model/gemma-1.1-2b-it/ckpt_mlx_model.safetensors")
+    # model = MLXGemmaModel(config)
+    # for idx in range(len(model.layers)):
+    #     model.layers[idx].input_layernorm.weight = mlx_weight[
+    #         "model.layers.{}.input_layernorm.weight".format(idx)]
+    #     model.layers[idx].self_attn.qkv_proj.weight = mlx_weight[
+    #         "model.layers.{}.self_attn.qkv_proj.weight".format(idx)]
+    #     model.layers[idx].self_attn.o_proj.weight = mlx_weight[
+    #         "model.layers.{}.self_attn.o_proj.weight".format(idx)]
+    #     model.layers[idx].mlp.gate_proj.weight = mlx_weight[
+    #         "model.layers.{}.mlp.gate_proj.weight".format(idx)]
+    #     model.layers[idx].mlp.up_proj.weight = mlx_weight[
+    #         "model.layers.{}.mlp.up_proj.weight".format(idx)]
+    #     model.layers[idx].mlp.down_proj.weight = mlx_weight[
+    #         "model.layers.{}.mlp.down_proj.weight".format(idx)]
+    #     model.layers[idx].post_attention_layernorm.weight = mlx_weight[
+    #         "model.layers.{}.post_attention_layernorm.weight".format(idx)]
+    # model.norm.weight = mlx_weight["model.norm.weight"]
+
+    # with torch.no_grad():
+    #     output = model(
+    #         hidden_states=mxc.array(hidden_states.detach().numpy()),
+    #         freqs_cis=mlx_freqs_cis,
+    #         kv_write_indices=mxc.array(kv_write_indices.numpy()),
+    #         kv_caches=mlx_kv_caches,
+    #         mask=mxc.array(mask.numpy()),
+    #         )
+    #     print("ckpt from MLX 모델 추론 결과")
+    #     print(output)
+
+
+if __name__ == "__main__":
+    torch_weight = getWeight()
+    getInput(torch_weight)

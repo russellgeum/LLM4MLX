@@ -43,61 +43,70 @@ def MLXapply_rotary_emb(x: mxc.array, freqs_cis: mxc.array) -> mxc.array:
     return x_out
     
 
-# class Sampler(nn.Module):
-#     def __init__(self, vocab_size: int):
-#         super().__init__()
-#         self.vocab_size = vocab_size
+class MLXSampler(mx.Module):
+    def __init__(self, vocab_size: int):
+        super().__init__()
+        self.vocab_size = vocab_size
 
-#     @torch.no_grad()
-#     def forward(self,
-#         embedding: torch.Tensor,
-#         hidden_states: torch.Tensor,
-#         output_positions: torch.Tensor,
-#         temperatures: Union[torch.Tensor, None],
-#         top_ps: torch.Tensor,
-#         top_ks: torch.Tensor,
-#         embedding_bias: Optional[torch.Tensor] = None,
-#         ) -> torch.Tensor:
+    # @torch.no_grad()
+    def __call__(self,
+        embedding: mxc.array,
+        hidden_states: mxc.array,
+        output_positions: mxc.array,
+        temperatures: Union[mxc.array, None],
+        top_ps: mxc.array,
+        top_ks: mxc.array,
+        embedding_bias: Optional[mxc.array] = None,
+        ) -> mxc.array:
 
-#         # Select the last element for each sequence.
-#         # (batch_size, input_len, hidden_size) -> (batch_size, hidden_size)
-#         hidden_states = hidden_states.index_select(
-#             1, output_positions).squeeze(dim=1)
-#         logits = torch.matmul(hidden_states, embedding.t())
-#         if embedding_bias is not None:
-#             logits += embedding_bias
+        # Select the last element for each sequence.
+        # (batch_size, input_len, hidden_size) -> (batch_size, hidden_size)
+        # output_position에 해당하는 인덱스 값의 dim = 1을 읽기
+        hidden_states = hidden_states[:, output_positions, :].squeeze(axis=1)
+        # embedding.t()와 matmul하여 256000개의 단어 사전 로짓을 계산
+        logits = mxc.matmul(hidden_states, embedding.T)
+        if embedding_bias is not None:
+            logits += embedding_bias
 
-#         if temperatures is None:
-#             return torch.argmax(logits, dim=-1).squeeze(dim=-1)
+        # temperature가 None이면, 가장 큰 값을 로짓으로 선택
+        # 아니면, temperature 스케일링 적용
+        if temperatures is None:
+            return mxc.argmax(logits, dim=-1).squeeze(dim=-1)
+        logits = logits / (temperatures[None, :])
 
-#         # Apply temperature scaling.
-#         logits.div_(temperatures.unsqueeze(dim=1))
+        # 1. 모든 가능한 단어에 대한 모델 예측의 확률 분포를 계산
+        # 2. 내림차순으로 정렬, probs_idx는 내림차순한 원소들이 몇 번 인덱스 인지를 반환
+        probs = mxc.softmax(logits, axis=-1)
+        probs_sort = mxc.sort(probs, axis = -1)
+        probs_idx  = mxc.argsort(probs, axis = -1)
+        
+        ## 오름차순으로 정렬되어있어서 이 기준으로 연산
+        # 1. 정렬된 확률의 누적합을 계산 -> 모든 값을 더하면 끝에서 1
+        # 2. 누적합과 내림차순확률의 차이를 계산 -> 차이가 top_pos보다 큰 것만 선택 
+        # 3. 누적확률이 top p에 도달하기 단어만 선택
+        # 4. [0.5, 0.3, 0.2] top p = 0.8이면 [0.5, 0.3] 만 선택
+        probs_sum   = mxc.cumsum(probs_sort, axis = -1, reverse = True)
+        top_ps_mask = (probs_sum - probs_sort) > top_ps[None, :]
+        probs_sort  = mxc.where(top_ps_mask, 0, probs_sort)
 
-#         # Calculate probabilities with softmax.
-#         probs = torch.softmax(logits, dim=-1, dtype=torch.float)
-#         probs_sort, probs_idx = torch.sort(probs, dim=-1, descending=True)
+        # 1. probs_idx 길이만큼의 0 ~ 숫자 텐서 생성
+        # 2. top_ks보다 큰 것은 True로 마스킹
+        # 3. 마스킹한 위치가 True이면 0, False이면 probs_sort로 하여 선택
+        top_ks_mask = mxc.arange(probs_idx.shape[-1])
+        top_ks_mask = top_ks_mask[None, :]
+        # top_ks_mask = top_ks_mask >= top_ks[None, :] 오름차순으로 사용하기 때문에 주석 처리
+        top_ks_mask = top_ks_mask < top_ks[None, :]
+        probs_sort  = mxc.where(top_ks_mask, 0, probs_sort)
 
-#         # Apply top-p, top-k.
-#         probs_sum = torch.cumsum(probs_sort, dim=-1)
-#         top_ps_mask = (probs_sum - probs_sort) > top_ps.unsqueeze(dim=1)
-#         probs_sort = torch.where(top_ps_mask, 0, probs_sort)
+        # 1. top-p, top-k로 필터링된 probs_sort를 재정규화
+        # 2. 필터링된 과정에서 prob_sort를 probs_idx에 따라 재정렬
+        probs_sort = probs_sort / probs_sort.sum(axis = -1, keepdims = True)
 
-#         top_ks_mask = torch.arange(probs_idx.shape[-1],
-#                                    device=probs_idx.device)
-#         top_ks_mask = top_ks_mask.expand(probs_idx.shape[0], -1)
-#         top_ks_mask = top_ks_mask >= top_ks.unsqueeze(dim=1)
-#         probs_sort  = torch.where(top_ks_mask, 0, probs_sort)
-
-#         # Re-normalization.
-#         probs_sort.div_(probs_sort.sum(dim=-1, keepdim=True))
-#         probs = torch.gather(probs_sort,
-#                              dim=-1,
-#                              index=torch.argsort(probs_idx, dim=-1))
-
-#         next_token_ids = torch.multinomial(probs,
-#                                            num_samples=1,
-#                                            replacement=True).squeeze(dim=-1)
-#         return next_token_ids
+        # MLX의 mxc.multinomial을 구현해보자.
+        # probs = mxc.gather(probs_sort, dim=-1, index=mxc.argsort(probs_idx, dim=-1)) # 오름차순으로 사용하기 때문에 주석 처리
+        np_probs = np.array(probs).squeeze(0)
+        next_token_ids = np.random.choice(len(probs[0]), size = 1, replace = True, p = np_probs)
+        return next_token_ids
     
 
 class MLXEmbedding(mx.Module):
@@ -361,3 +370,37 @@ class MLXGemmaModel(mx.Module):
         # 마지막 RMSNorm 레이어 포워드
         hidden_states = self.norm(hidden_states)
         return hidden_states
+    
+
+# class MLXGemmaForCausalLM(mx.Module):
+#     def __init__(self, config):
+#         super().__init__()
+#         self.config = config
+#         assert config.hidden_size % config.num_attention_heads == 0
+#         print("dtype :   ", config.dtype)
+#         max_seq_len    = config.max_position_embeddings
+#         head_dim       = config.head_dim
+#         vocab_size     = config.vocab_size
+#         self.tokenizer = tokenizer.Tokenizer(config.tokenizer)
+#         self.embedder  = MLXEmbedding(vocab_size, config.hidden_size, config.quant)
+#         self.model     = MLXGemmaModel(config)
+#         self.sampler   = MLXSampler(vocab_size)
+
+#         rope_theta = getattr(config, "rope_theta", 10000)
+#         self.freqs_cis = MLXprecompute_freqs_cis(head_dim, max_seq_len * 2, theta = rope_theta)
+
+
+#     def __call__(self,
+#         input_token_ids: mxc.array,
+#         input_positions: mxc.array,
+#         kv_write_indices: mxc.array,
+#         kv_caches: List[Tuple[mxc.array, mxc.array]],
+#         mask: mxc.array,
+#         output_positions: mxc.array,
+#         temperatures: Union[mxc.array, None],
+#         top_ps: mxc.array,
+#         top_ks: mxc.array,
+#         **kwargs,
+#         ) -> mxc.array:
+#         freqs_cis        = self.freqs_cis.index_select(0, input_positions)
+#         kv_write_indices = input_positions

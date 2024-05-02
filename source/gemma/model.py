@@ -64,42 +64,46 @@ class Sampler(nn.Module):
 
         # Select the last element for each sequence.
         # (batch_size, input_len, hidden_size) -> (batch_size, hidden_size)
-        hidden_states = hidden_states.index_select(
-            1, output_positions).squeeze(dim=1)
+        # output_position에 해당하는 인덱스 값의 dim = 1을 읽기
+        hidden_states = hidden_states.index_select(1, output_positions).squeeze(dim=1)
+        # embedding.t()와 matmul하여 256000개의 단어 사전 로짓을 계산
         logits = torch.matmul(hidden_states, embedding.t())
         if embedding_bias is not None:
             logits += embedding_bias
 
+        # temperature가 None이면, 가장 큰 값을 로짓으로 선택
+        # 아니면, temperature 스케일링 적용
         if temperatures is None:
             return torch.argmax(logits, dim=-1).squeeze(dim=-1)
-
-        # Apply temperature scaling.
         logits.div_(temperatures.unsqueeze(dim=1))
 
-        # Calculate probabilities with softmax.
+        # 1. 모든 가능한 단어에 대한 모델 예측의 확률 분포를 계산
+        # 2. 내림차순으로 정렬, probs_idx는 내림차순한 원소들이 몇 번 인덱스 인지를 반환
         probs = torch.softmax(logits, dim=-1, dtype=torch.float)
         probs_sort, probs_idx = torch.sort(probs, dim=-1, descending=True)
 
-        # Apply top-p, top-k.
-        probs_sum = torch.cumsum(probs_sort, dim=-1)
+        # 1. 정렬된 확률의 누적합을 계산 -> 모든 값을 더하면 끝에서 1
+        # 2. 누적합과 내림차순확률의 차이를 계산 -> 차이가 top_pos보다 큰 것만 선택 
+        # 3. 누적확률이 top p에 도달하기 단어만 선택
+        # 4. [0.5, 0.3, 0.2] top p = 0.8이면 [0.5, 0.3] 만 선택
+        probs_sum   = torch.cumsum(probs_sort, dim=-1)
         top_ps_mask = (probs_sum - probs_sort) > top_ps.unsqueeze(dim=1)
-        probs_sort = torch.where(top_ps_mask, 0, probs_sort)
+        probs_sort  = torch.where(top_ps_mask, 0, probs_sort) # (boolean, x, y), True이면 x, False이면 y
 
-        top_ks_mask = torch.arange(probs_idx.shape[-1],
-                                   device=probs_idx.device)
+        # 1. probs_idx 길이만큼의 0 ~ 숫자 텐서 생성
+        # 2. top_ks보다 큰 것은 True로 마스킹
+        # 3. 마스킹한 위치가 True이면 0, False이면 probs_sort로 하여 선택
+        top_ks_mask = torch.arange(probs_idx.shape[-1], device=probs_idx.device)
         top_ks_mask = top_ks_mask.expand(probs_idx.shape[0], -1)
         top_ks_mask = top_ks_mask >= top_ks.unsqueeze(dim=1)
         probs_sort  = torch.where(top_ks_mask, 0, probs_sort)
 
-        # Re-normalization.
+        # 1. top-p, top-k로 필터링된 probs_sort를 재정규화
+        # 2. 필터링된 과정에서 prob_sort를 probs_idx에 따라 재정렬
         probs_sort.div_(probs_sort.sum(dim=-1, keepdim=True))
-        probs = torch.gather(probs_sort,
-                             dim=-1,
-                             index=torch.argsort(probs_idx, dim=-1))
-
-        next_token_ids = torch.multinomial(probs,
-                                           num_samples=1,
-                                           replacement=True).squeeze(dim=-1)
+        probs = torch.gather(probs_sort, dim=-1, index=torch.argsort(probs_idx, dim=-1))
+        # 3. multinomial에 따라 probs에서 1개를 선택하여 next_token으로 보냄
+        next_token_ids = torch.multinomial(probs, num_samples=1, replacement=True).squeeze(dim=-1)
         return next_token_ids
 
 
