@@ -6,9 +6,7 @@ Future Directions:
 3. Understand methods to optimize and accelerate MLX LLM models for inference.
 
 ## To Do
-1. GemmaModel, MLXGemmaModel이 같은 것을 확인 (완료)  
-   torch safetensor -> MLX safetensor와 torch ckpt -> MLX safetensor의 MLX 모델 추론이 동일 (당연히 같아야 함)
-   torch safetensor는 q, k, v가 분리되어 있음 이를 qkv로 묶으면 torch ckpt의 추론이 동일함 (당연히 같아야 함)
+1. Google torch 구현체에 safetensor 로드하여 추론 완료
 2. Sampler와 디코딩 단계 구현하여 붙이기 (진행 중)  
 3. Tokenizer 붙이기
 4. weight를 옮기는 것은 test_model.py에서 가구현

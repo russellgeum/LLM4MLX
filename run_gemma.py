@@ -17,13 +17,13 @@ import random
 
 import numpy as np
 import torch
-from source.gemma import config
-from source.gemma import model as gemma_model
+from source.config import *
+from source.gemma_torch import *
 
 
 @contextlib.contextmanager
 def _set_default_tensor_type(dtype: torch.dtype):
-    """Sets the default torch dtype to the given dtype."""
+    # Sets the default torch dtype to the given dtype.
     torch.set_default_dtype(dtype)
     yield
     torch.set_default_dtype(torch.float)
@@ -31,10 +31,10 @@ def _set_default_tensor_type(dtype: torch.dtype):
 
 def main(args):
     # Construct the model config.
-    model_config = config.get_model_config(args.variant)
+    model_config = get_model_config(args.variant)
     model_config.dtype = "float32" if args.device == "cpu" else "float16"
     model_config.quant = args.quant
-    model_config.dtype = "float16"
+    model_config.dtype = "float32"
 
     # Seed random.
     random.seed(args.seed)
@@ -44,7 +44,7 @@ def main(args):
     # Create the model and load the weights.
     device = torch.device(args.device)
     with _set_default_tensor_type(model_config.get_dtype()):
-        model = gemma_model.GemmaForCausalLM(model_config)
+        model = GemmaForCausalLM(model_config)
         model.load_weights(args.ckpt)
         model = model.to(device).eval()
     print("Model loading done")
@@ -61,15 +61,9 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--ckpt", type=str, required=True)
-    parser.add_argument("--variant",
-                        type=str,
-                        default="2b",
-                        choices=["2b", "7b"])
-    parser.add_argument("--device",
-                        type=str,
-                        default="cpu",
-                        choices=["cpu", "cuda"])
+    parser.add_argument("--ckpt", type=str, default= "model/model-{}-of-{}.safetensors")
+    parser.add_argument("--variant", type=str, default="2b", choices=["2b", "7b"])
+    parser.add_argument("--device", type=str, default="cpu", choices=["cpu", "cuda"])
     parser.add_argument("--output_len", type=int, default=100)
     parser.add_argument("--seed", type=int, default=12345)
     parser.add_argument("--quant", action='store_true')
