@@ -19,19 +19,15 @@ bash requirements.sh
 ```
 PyTorch2MLX
   ㄴmodel
-    ㄴgemma-2b-it
-      ㄴgemma-2b-it.ckpt
-      ㄴmodel-00001-of-00002.safetensors
-      ㄴmodel-00002-of-00002.safetensors
-      ㄴtokenizer.model
-      ㄴ... ...
-    ㄴllama3-8b
+    ㄴmodel-00001-of-00002.safetensors
+    ㄴmodel-00002-of-00002.safetensors
+    ㄴtokenizer.model
+    ㄴ... ...
   ㄴsource
-    ㄴgemma
-      ㄴconfig.py
-      ㄴmodel_mlx.py
-      ㄴmodel.py
-      ㄴtokenizer.py
+    ㄴconfig.py
+    ㄴgemma_mlx.py
+    ㄴgemma_torch.py
+    ㄴtokenizer.py
   requirements.sh
 ```
 ## Usage  
