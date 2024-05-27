@@ -13,16 +13,14 @@
 # limitations under the License.
 
 
-"""
-Gemma model config.
-"""
+# Gemma model config.
 import torch
 import dataclasses
 from typing import Optional
 
 
 # Keep a mapping from dtype strings to the supported torch dtypes.
-_STR_DTYPE_TO_TORCH_DTYPE = dict({
+DTYPE_TORCH = dict({
     'float16': torch.float16,
     'float': torch.float32,
     'float32': torch.float32,
@@ -55,11 +53,11 @@ class GemmaConfig:
     # Whether a quantized version of the model is used.
     quant: bool = False
     # The path to the model tokenizer.
-    tokenizer: Optional[str] = 'model/tokenizer.model'
+    tokenizer: Optional[str] = 'model/gemma-1.1-2b-it/tokenizer.model'
 
     def get_dtype(self) -> Optional[torch.dtype]:
         """Gets the torch dtype from the config dtype string."""
-        return _STR_DTYPE_TO_TORCH_DTYPE.get(self.dtype, None)
+        return DTYPE_TORCH.get(self.dtype, None)
 
 
 def get_config_for_7b() -> GemmaConfig:
@@ -73,7 +71,7 @@ def get_config_for_2b() -> GemmaConfig:
         num_key_value_heads=1,
         hidden_size=2048,
         intermediate_size=16384
-    )
+        )
 
 
 def get_model_config(variant: str) -> GemmaConfig:

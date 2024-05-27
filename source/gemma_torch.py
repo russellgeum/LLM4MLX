@@ -71,8 +71,7 @@ class Sampler(nn.Module):
         if embedding_bias is not None:
             logits += embedding_bias
 
-        # temperature가 None이면, 가장 큰 값을 로짓으로 선택
-        # 아니면, temperature 스케일링 적용
+        # temperature가 None이면, 가장 큰 값을 로짓으로 선택, 아니면 temperature 스케일링 적용
         if temperatures is None:
             return torch.argmax(logits, dim=-1).squeeze(dim=-1)
         logits.div_(temperatures.unsqueeze(dim=1))
@@ -100,9 +99,9 @@ class Sampler(nn.Module):
 
         # 1. top-p, top-k로 필터링된 probs_sort를 재정규화
         # 2. 필터링된 과정에서 prob_sort를 probs_idx에 따라 재정렬
+        # 3. multinomial에 따라 probs에서 1개를 선택하여 next_token으로 반환
         probs_sort.div_(probs_sort.sum(dim=-1, keepdim=True))
         probs = torch.gather(probs_sort, dim=-1, index=torch.argsort(probs_idx, dim=-1))
-        # 3. multinomial에 따라 probs에서 1개를 선택하여 next_token으로 보냄
         next_token_ids = torch.multinomial(probs, num_samples=1, replacement=True).squeeze(dim=-1)
         return next_token_ids
 
@@ -401,16 +400,16 @@ class GemmaForCausalLM(nn.Module):
         self.config = config
         assert config.hidden_size % config.num_attention_heads == 0
         print("dtype :   ", config.dtype)
-        max_seq_len    = config.max_position_embeddings
-        head_dim       = config.head_dim
-        vocab_size     = config.vocab_size
-        self.tokenizer     = Tokenizer(config.tokenizer)
-        self.model         = GemmaModel(config)
-        self.sampler       = Sampler(vocab_size)
+        max_seq_len      = config.max_position_embeddings
+        head_dim         = config.head_dim
+        vocab_size       = config.vocab_size
+        self.tokenizer   = Tokenizer(config.tokenizer)
+        self.model       = GemmaModel(config)
+        self.sampler     = Sampler(vocab_size)
 
         # Pre-compute rotary embedding table.
-        rope_theta = getattr(config, 'rope_theta', 10000)
-        freqs_cis  = precompute_freqs_cis(head_dim, max_seq_len * 2, theta=rope_theta)
+        rope_theta       = getattr(config, 'rope_theta', 10000)
+        freqs_cis        = precompute_freqs_cis(head_dim, max_seq_len * 2, theta=rope_theta)
         self.register_buffer('freqs_cis', freqs_cis)
 
     @torch.no_grad()

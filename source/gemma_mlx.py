@@ -26,8 +26,8 @@ def MLXprecompute_freqs_cis(dim: int, end: int, theta: float = 10000.0) -> mxc.a
     freqs = 1.0 / (theta ** (mxc.arange(0, dim, 2)[:(dim // 2)].astype(mxc.float32) / dim))
     t = mxc.arange(end)
     freqs = mxc.outer(t, freqs).astype(mxc.float32)
-    cos = mxc.ones_like(freqs) * mxc.cos(freqs)
-    sin = mxc.ones_like(freqs) * mxc.sin(freqs)
+    cos   = mxc.ones_like(freqs) * mxc.cos(freqs)
+    sin   = mxc.ones_like(freqs) * mxc.sin(freqs)
     freq_cis = mxc.stack([cos, sin], axis = -1)
     return freq_cis
 
@@ -240,8 +240,12 @@ class MLXGemmaAttention(mx.Module):
         self.q_size      = self.num_heads * self.head_dim
         self.kv_size     = self.num_kv_heads * self.head_dim
         self.scaling     = self.head_dim**-0.5
-        self.qkv_proj    = MLXLinear(
-            self.hidden_size, (self.num_heads + 2 * self.num_kv_heads) * self.head_dim, quant=quant)
+        self.q_proj      = MLXLinear(
+            self.hidden_size, (self.num_heads) * self.head_dim, quant=quant)
+        self.k_proj      = MLXLinear(
+            self.hidden_size, (self.num_kv_heads) * self.head_dim, quant=quant)
+        self.v_proj      = MLXLinear(
+            self.hidden_size, (self.num_kv_heads) * self.head_dim, quant=quant)
         self.o_proj      = MLXLinear(
             self.num_heads * self.head_dim, self.hidden_size, quant=quant)
 

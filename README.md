@@ -1,28 +1,33 @@
 ## PyTorch2MLX
-Objective: Convert the Hugging Face satetensor model into an MLX implementation, and develop a library for inference on Apple Silicon.  
-Future Directions:  
-1. Training of LLMs based on Hugging Face (limited to Gemme-2B, Llama3-8B).  
-2. Develop a library for converting PyTorch models to MLX models.  
-3. Understand methods to optimize and accelerate MLX LLM models for inference.
+이 레포지토리는 허깅페이스의 gemma-1.1-2b-it safetensor를 로드하여.  
+파이토치 구현체에서 gemma-2b, gemma-7b 모델을 추론하는 코드를 보여준다.  
+향후 방향:  
+허깅페이스의 safetensor를 mlx.array로 변환하여, MLX 구현체에서 추론한다.  
 
-## To Do
-1. Google torch 구현체에 safetensor 로드하여 추론 완료
-2. Sampler와 디코딩 단계 구현하여 붙이기 (진행 중)  
-3. Tokenizer 붙이기
-4. weight를 옮기는 것은 test_model.py에서 가구현
+## 해야할 작업
+1. [완료] gemma torch 구현체에 safetensor 로드하여 추론
+2. [예정] gemma mlx 구현체에 safetensor를 변환한 mlx.array로 구현하여 추론
 
 ## Requirements
 ```
 bash requirements.sh
 ```
+
 ## Directory
 ```
 PyTorch2MLX
   ㄴmodel
-    ㄴmodel-00001-of-00002.safetensors
-    ㄴmodel-00002-of-00002.safetensors
-    ㄴtokenizer.model
-    ㄴ... ...
+    ㄴgemma-1.1-2b-it
+      ㄴmodel-00001-of-00002.safetensors
+      ㄴmodel-00002-of-00002.safetensors
+      ㄴtokenizer.model
+      ㄴ... ...
+    ㄴgemma-1.1-7b-it
+      ㄴmodel-00001-of-00004.safetensors
+      ㄴ... ...
+      ㄴmodel-00004-of-00004.safetensors
+      ㄴtokenizer.model
+      ㄴ... ...
   ㄴsource
     ㄴconfig.py
     ㄴgemma_mlx.py
@@ -30,10 +35,14 @@ PyTorch2MLX
     ㄴtokenizer.py
   requirements.sh
 ```
+
 ## Usage  
-Coming soon
+```
+python run-gemma.py
+```
 
 ## Reference
 - [Google Gemma Official](https://github.com/google/gemma_pytorch)
-- [HuggingFace gemma-1.1-2b-it](https://huggingface.co/google/gemma-1.1-2b-it)
-- [HuggingFace gemma-1.1-2b-it-pytorch](https://huggingface.co/google/gemma-1.1-2b-it-pytorch)
+- [HuggingFace Gemma-1.1-2b-it](https://huggingface.co/google/gemma-1.1-2b-it)
+- [HuggingFace Gemma-1.1-7b-it](https://huggingface.co/google/gemma-1.1-7b-it)
+- [HuggingFace Gemma-1.1-2b-it-pytorch](https://huggingface.co/google/gemma-1.1-2b-it-pytorch)
